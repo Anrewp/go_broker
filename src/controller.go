@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+const MSG = "v"
+const TIMEOUT = "timeout"
+
 func handle(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -23,20 +26,17 @@ func handlePUT(w http.ResponseWriter, r *http.Request) {
 	qName := rQueue(r)
 	msg := rMsg(r)
 	if msg == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		log.Println("400 BadRequest")
+		badRequest(w, qName)
 		return
 	}
-
 	queue.Push(qName, msg)
-	w.WriteHeader(http.StatusOK)
-	log.Println("200 OK pushed " + msg + " to queue " + qName)
+	succesPush(w, qName, msg)
 }
 
 func handleGET(w http.ResponseWriter, r *http.Request) {
 	timeout := r.URL.Query().Get(TIMEOUT)
 	if timeout != "" {
-		handleWithTimeOut(w, r, timeout)
+		handleWithTimeout(w, r, timeout)
 	} else {
 		handleCommon(w, r)
 	}
@@ -46,35 +46,48 @@ func handleCommon(w http.ResponseWriter, r *http.Request) {
 	qName := rQueue(r)
 	msg := queue.Pop(qName)
 	if msg == "" {
-		w.WriteHeader(http.StatusNotFound)
-		log.Println("404 Not Found")
+		notFound(w, qName)
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(msg))
-	log.Println("200 OK returned: " + msg + " from queue " + qName)
+	succesPop(w, qName, msg)
 }
 
-func handleWithTimeOut(w http.ResponseWriter, r *http.Request, timout string) {
+func handleWithTimeout(w http.ResponseWriter, r *http.Request, timeout string) {
 	qName := rQueue(r)
-	ttl, err := strconv.Atoi(timout)
+	ttl, err := strconv.Atoi(timeout)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	ch := queue.PopWait(qName)
-
-	select {
-	case msg := <-ch:
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(msg))
-		log.Println("200 OK returned: " + msg + " from queue " + qName)
-	case <-time.After(time.Duration(ttl) * time.Second):
-		queue.RemoveSub(qName, ch)
-		w.WriteHeader(http.StatusNotFound)
-		log.Println("404 Not found with timeout")
+	msg := queue.PopWait(qName, time.Duration(ttl))
+	if msg == "" {
+		notFound(w, qName)
+		return
 	}
+
+	succesPop(w, qName, msg)
+}
+
+func succesPush(w http.ResponseWriter, qName, msg string) {
+	w.WriteHeader(http.StatusOK)
+	log.Printf("200 OK [%v]: <- %v ", qName, msg)
+}
+
+func succesPop(w http.ResponseWriter, qName, msg string) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(msg))
+	log.Printf("200 OK [%v]: -> %v ", qName, msg)
+}
+
+func notFound(w http.ResponseWriter, qName string) {
+	w.WriteHeader(http.StatusNotFound)
+	log.Printf("404 NotFound [%v]: -> nil", qName)
+}
+
+func badRequest(w http.ResponseWriter, qName string) {
+	w.WriteHeader(http.StatusBadRequest)
+	log.Printf("400 BadRequest [%v]: <- nil", qName)
 }
 
 func rQueue(r *http.Request) string {
